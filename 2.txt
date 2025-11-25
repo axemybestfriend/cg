@@ -1,0 +1,371 @@
+#include <iostream>
+#include <vector>
+#include <GLFW/glfw3.h>
+#include <cmath>
+#include <algorithm>
+
+const int WIDTH = 1024;
+const int HEIGHT = 1024;
+
+const float ORTHO_LEFT = -10.0f;
+const float ORTHO_RIGHT = 40.0f;
+const float ORTHO_BOTTOM = -10.0f;
+const float ORTHO_TOP = 40.0f;
+const float ORTHO_NEAR = -100.0f;
+const float ORTHO_FAR = 100.0f;
+
+const int MIN_SIZE = 4; 
+
+float rotX = 0, rotY = 0, rotZ = 0;
+float posX = 0, posY = 0, posZ = 0;
+float scaleRate = 1.0f;
+
+struct Color { float r, g, b, a; };
+struct Vertex { float x, y, z; };
+struct Poly { std::vector<Vertex> verts; Color color; };
+struct Mat4 { float m[16]; };
+struct ScreenRect { int x0, y0, x1, y1; };
+
+std::vector<ScreenRect> Rects;
+bool showRects = true;
+
+int currentPolySet = 0;
+std::vector<std::vector<Poly>> allPolySets;
+
+Mat4 makeIdentity() {
+    Mat4 mat = {};
+    for (int i = 0; i < 16; ++i) mat.m[i] = 0.0f;
+    mat.m[0] = mat.m[5] = mat.m[10] = mat.m[15] = 1.0f;
+    return mat;
+}
+Mat4 makeScale(float sx, float sy, float sz) { Mat4 m = makeIdentity(); m.m[0] = sx; m.m[5] = sy; m.m[10] = sz; return m; }
+Mat4 makeRotationX(float a) { Mat4 m = makeIdentity(); float c = cosf(a), s = sinf(a); m.m[5] = c; m.m[6] = s; m.m[9] = -s; m.m[10] = c; return m; }
+Mat4 makeRotationY(float a) { Mat4 m = makeIdentity(); float c = cosf(a), s = sinf(a); m.m[0] = c; m.m[2] = -s; m.m[8] = s; m.m[10] = c; return m; }
+Mat4 makeRotationZ(float a) { Mat4 m = makeIdentity(); float c = cosf(a), s = sinf(a); m.m[0] = c; m.m[1] = s; m.m[4] = -s; m.m[5] = c; return m; }
+Mat4 makeTranslation(float tx, float ty, float tz) { Mat4 m = makeIdentity(); m.m[12] = tx; m.m[13] = ty; m.m[14] = tz; return m; }
+
+Mat4 multiply(const Mat4& a, const Mat4& b) {
+    Mat4 r = {};
+    for (int row = 0; row < 4; ++row)
+        for (int col = 0; col < 4; ++col) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; ++k)
+                sum += a.m[row * 4 + k] * b.m[k * 4 + col];
+            r.m[row * 4 + col] = sum;
+        }
+    return r;
+}
+
+Mat4 makeOrtho(float l, float r, float b, float t, float n, float f) {
+    Mat4 m = {};
+    m.m[0] = 2.0f / (r - l);
+    m.m[5] = 2.0f / (t - b);
+    m.m[10] = 2.0f / (f - n);
+    m.m[12] = -(r + l) / (r - l);
+    m.m[13] = -(t + b) / (t - b);
+    m.m[14] = -(f + n) / (f - n);
+    m.m[15] = 1.0f;
+    return m;
+}
+
+void mulMat4Vec4(const Mat4& M, float vx, float vy, float vz, float vw, float& rx, float& ry, float& rz, float& rw) {
+    rx = M.m[0] * vx + M.m[4] * vy + M.m[8] * vz + M.m[12] * vw;
+    ry = M.m[1] * vx + M.m[5] * vy + M.m[9] * vz + M.m[13] * vw;
+    rz = M.m[2] * vx + M.m[6] * vy + M.m[10] * vz + M.m[14] * vw;
+    rw = M.m[3] * vx + M.m[7] * vy + M.m[11] * vz + M.m[15] * vw;
+}
+
+void setupPolygonSet1() {
+    std::vector<Poly> polys;
+    polys.push_back(Poly{ {{10,3,20},{20,28,20},{22,28,20},{22,3,20}}, {1,0.4f,0.4f,1} });
+    polys.push_back(Poly{ {{5,10,20},{5,20,20},{27,20,10},{27,10,10}}, {0.4f,1,0.5f,1} });
+    polys.push_back(Poly{ {{15,15,25},{25,25,5},{30,10,5}}, {0.4f,0.6f,1,1} });
+    polys.push_back(Poly{ {{28,5,15},{33,5,15},{33,10,15},{28,10,15}}, {1,1,0,1} });
+    allPolySets.push_back(polys);
+}
+
+void setupPolygonSet2() {
+    std::vector<Poly> polys;
+    polys.push_back(Poly{ {{4,4,25},{12,4,25},{12,12,25},{4,12,25}}, {1,0,0,1} });        // красный
+    polys.push_back(Poly{ {{8,6,20},{16,6,20},{16,14,20},{8,14,20}}, {0,1,0,1} });       // зелёный
+    polys.push_back(Poly{ {{12,8,15},{20,8,15},{20,16,15},{12,16,15}}, {0,0,1,1} });     // синий
+    polys.push_back(Poly{ {{6,10,30},{14,10,30},{10,18,30}}, {1,1,0,1} });                // жёлтый
+    polys.push_back(Poly{ {{14,12,10},{22,12,10},{18,20,10}}, {1,0,1,1} });              // фиолетовый
+    polys.push_back(Poly{ {{5,5,15},{12,5,35},{10,12,25}}, {0,1,1,1} });                  // бирюзовый
+    polys.push_back(Poly{ {{10,6,22},{18,6,18},{14,14,28}}, {1,0.5f,0,1} });              // оранжевый
+    polys.push_back(Poly{ {{12,10,12},{20,10,30},{16,18,20}}, {0.5f,0,1,1} });            // фиолетово-синий
+
+    allPolySets.push_back(polys);
+}
+
+
+void setupPolygonSet3() {
+    std::vector<Poly> polys;
+
+    polys.push_back(Poly{ {{6,6,18},{16,6,18},{16,16,18},{6,16,18}}, {1,0,0,1} });     // красный
+    polys.push_back(Poly{ {{10,8,22},{20,8,22},{20,18,22},{10,18,22}}, {0,1,0,1} });   // зелёный
+    polys.push_back(Poly{ {{14,12,14},{24,12,14},{24,22,14},{14,22,14}}, {0,0,1,1} }); // синий
+    polys.push_back(Poly{ {{8,8,10},{18,8,30},{12,18,20}}, {1,1,0,1} });                // жёлтый
+    polys.push_back(Poly{ {{12,10,24},{22,10,16},{16,20,28}}, {1,0,1,1} });             // фиолетовый
+    polys.push_back(Poly{ {{6,14,12},{16,14,32},{10,24,20}}, {0,1,1,1} });              // бирюзовый
+    polys.push_back(Poly{ {{15,15,35},{20,15,35},{20,20,35},{15,20,35}}, {1,0.5f,0,1} }); // оранжевый
+
+    allPolySets.push_back(polys);
+}
+
+
+void setupAllPolygonSets() {
+    allPolySets.clear();
+    setupPolygonSet1();
+    setupPolygonSet2();
+    setupPolygonSet3();
+    currentPolySet = 0;
+}
+std::vector<Poly> getCurrentPolys() {
+    if (allPolySets.empty()) return std::vector<Poly>();
+    return allPolySets[currentPolySet];
+}
+
+
+Poly transformPoly(const Poly& p, const Mat4& MVP) {
+    Poly out; out.color = p.color;
+    for (auto& v : p.verts) {
+        float cx, cy, cz, cw;
+        mulMat4Vec4(MVP, v.x, v.y, v.z, 1.0f, cx, cy, cz, cw);
+        if (fabs(cw) < 1e-9f) cw = 1e-9f;
+        float X = cx / cw;
+        float Y = cy / cw;
+        float Z = cz / cw;
+        float px = (X * 0.5f + 0.5f) * WIDTH;
+        float py = (Y * 0.5f + 0.5f) * HEIGHT;
+        out.verts.push_back(Vertex{ px, py, Z });
+    }
+    return out;
+}
+
+void drawPoly(const Poly& p) {
+    glColor4f(p.color.r, p.color.g, p.color.b, p.color.a);
+    glBegin(GL_POLYGON);
+    for (auto& v : p.verts) {
+        float X = (v.x / float(WIDTH)) * 2.0f - 1.0f;
+        float Y = (v.y / float(HEIGHT)) * 2.0f - 1.0f;
+        float Z = v.z;
+        glVertex3f(X, Y, Z);
+    }
+    glEnd();
+}
+
+void drawRect(const ScreenRect& rect) {
+    float left = (rect.x0 / float(WIDTH)) * 2.0f - 1.0f;
+    float right = (rect.x1 / float(WIDTH)) * 2.0f - 1.0f;
+    float bottom = (rect.y0 / float(HEIGHT)) * 2.0f - 1.0f;
+    float top = (rect.y1 / float(HEIGHT)) * 2.0f - 1.0f;
+    glColor4f(1.0f, 1.0f, 0.0f, 0.6f);
+    glBegin(GL_LINE_LOOP);
+    glVertex3f(left, bottom, 0.0f);
+    glVertex3f(right, bottom, 0.0f);
+    glVertex3f(right, top, 0.0f);
+    glVertex3f(left, top, 0.0f);
+    glEnd();
+}
+
+bool pointInPolygon(float x, float y, const Poly& poly) {
+    int n = poly.verts.size();
+    bool inside = false;
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        float xi = poly.verts[i].x, yi = poly.verts[i].y;
+        float xj = poly.verts[j].x, yj = poly.verts[j].y;
+        bool intersect = ((yi > y) != (yj > y)) &&
+            (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+    }
+    return inside;
+}
+
+bool lineIntersectsLine(float x1, float y1, float x2, float y2, float x3, float y3, float x4, float y4) {
+    float denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
+    if (fabs(denom) < 1e-6f) return false;
+    float ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
+    float ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
+    return (ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1);
+}
+
+bool polyIntersectsRect(const Poly& poly, const ScreenRect& rect) {
+    float left = rect.x0, right = rect.x1, bottom = rect.y0, top = rect.y1;
+    for (auto& v : poly.verts) {
+        if (v.x >= left && v.x <= right && v.y >= bottom && v.y <= top) return true;
+    }
+    if (pointInPolygon(left, bottom, poly) ||
+        pointInPolygon(right, bottom, poly) ||
+        pointInPolygon(left, top, poly) ||
+        pointInPolygon(right, top, poly)) return true;
+    int n = poly.verts.size();
+    for (int i = 0; i < n; ++i) {
+        int j = (i + 1) % n;
+        float x1 = poly.verts[i].x, y1 = poly.verts[i].y;
+        float x2 = poly.verts[j].x, y2 = poly.verts[j].y;
+        if (lineIntersectsLine(x1, y1, x2, y2, left, bottom, left, top)) return true;
+        if (lineIntersectsLine(x1, y1, x2, y2, right, bottom, right, top)) return true;
+        if (lineIntersectsLine(x1, y1, x2, y2, left, bottom, right, bottom)) return true;
+        if (lineIntersectsLine(x1, y1, x2, y2, left, top, right, top)) return true;
+    }
+    return false;
+}
+
+float getZFromPlanePixel(const Poly& poly, float x, float y) {
+    if (poly.verts.size() < 3) return -1e9f;
+    const Vertex& v0 = poly.verts[0];
+    const Vertex& v1 = poly.verts[1];
+    const Vertex& v2 = poly.verts[2];
+    float A = (v1.y - v0.y) * (v2.z - v0.z) - (v1.z - v0.z) * (v2.y - v0.y);
+    float B = (v1.z - v0.z) * (v2.x - v0.x) - (v1.x - v0.x) * (v2.z - v0.z);
+    float C = (v1.x - v0.x) * (v2.y - v0.y) - (v1.y - v0.y) * (v2.x - v0.x);
+    if (fabs(C) < 1e-9f) return v0.z;
+    float z = v0.z - (A * (x - v0.x) + B * (y - v0.y)) / C;
+    if (!std::isfinite(z)) z = v0.z;
+    return z;
+}
+
+void fillRect(const Poly* bestPoly, const ScreenRect& rect) {
+    float cx = (rect.x0 + rect.x1) * 0.5f;
+    float cy = (rect.y0 + rect.y1) * 0.5f;
+    float z = getZFromPlanePixel(*bestPoly, cx, cy);
+    float leftN = (rect.x0 / float(WIDTH)) * 2.0f - 1.0f;
+    float rightN = (rect.x1 / float(WIDTH)) * 2.0f - 1.0f;
+    float bottomN = (rect.y0 / float(HEIGHT)) * 2.0f - 1.0f;
+    float topN = (rect.y1 / float(HEIGHT)) * 2.0f - 1.0f;
+    glColor4f(bestPoly->color.r, bestPoly->color.g, bestPoly->color.b, bestPoly->color.a);
+    glBegin(GL_QUADS);
+    glVertex3f(leftN, bottomN, z);
+    glVertex3f(rightN, bottomN, z);
+    glVertex3f(rightN, topN, z);
+    glVertex3f(leftN, topN, z);
+    glEnd();
+}
+
+void warnock(const std::vector<Poly>& polys, const ScreenRect& rect) {
+    if (showRects) Rects.push_back(rect);
+
+    std::vector<const Poly*> intersectingPolys;
+    intersectingPolys.reserve(polys.size());
+    for (auto& poly : polys) {
+        if (polyIntersectsRect(poly, rect)) intersectingPolys.push_back(&poly);
+    }
+
+    if (intersectingPolys.empty()) return;
+
+    if (intersectingPolys.size() == 1) {
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(rect.x0, rect.y0, rect.x1 - rect.x0, rect.y1 - rect.y0);
+        drawPoly(*intersectingPolys[0]);
+        glDisable(GL_SCISSOR_TEST);
+        return;
+    }
+
+    if ((rect.x1 - rect.x0) <= MIN_SIZE && (rect.y1 - rect.y0) <= MIN_SIZE) {
+        float cx = rect.x0 + 0.5f;
+        float cy = rect.y0 + 0.5f;
+        const Poly* closest = nullptr;
+        float maxZ = -1e30f;
+        for (auto polyPtr : intersectingPolys) {
+            float z = getZFromPlanePixel(*polyPtr, cx, cy);
+            if (z > maxZ + 1e-6f) { maxZ = z; closest = polyPtr; }
+        }
+        if (closest) fillRect(closest, rect);
+        return;
+    }
+
+    int midX = (rect.x0 + rect.x1) / 2;
+    int midY = (rect.y0 + rect.y1) / 2;
+    
+    warnock(polys, { rect.x0, rect.y0, midX, midY });
+    warnock(polys, { midX, rect.y0, rect.x1, midY });
+    warnock(polys, { rect.x0, midY, midX, rect.y1 });
+    warnock(polys, { midX, midY, rect.x1, rect.y1 });
+}
+
+void processKey(GLFWwindow* window, float deltaTime) {
+    const float rSpeed = 1.5f * deltaTime, tSpeed = 1.0f * deltaTime, sSpeed = 0.8f * deltaTime;
+    if (glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS) rotX += rSpeed;
+    if (glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS) rotY += rSpeed;
+    if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS) rotZ += rSpeed;
+    if (glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS) rotX -= rSpeed;
+    if (glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS) rotY -= rSpeed;
+    if (glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS) rotZ -= rSpeed;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) posX -= tSpeed;
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) posX += tSpeed;
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) posY -= tSpeed;
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) posY += tSpeed;
+    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) posZ += tSpeed;
+    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) posZ -= tSpeed;
+    if (glfwGetKey(window, GLFW_KEY_LEFT_BRACKET) == GLFW_PRESS) scaleRate -= sSpeed;
+    if (glfwGetKey(window, GLFW_KEY_RIGHT_BRACKET) == GLFW_PRESS) scaleRate += sSpeed;
+    if (scaleRate < 0.1f) scaleRate = 0.1f;
+    if (scaleRate > 10.0f) scaleRate = 10.0f;
+    if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) { rotX = rotY = rotZ = 0; posX = posY = posZ = 0; scaleRate = 1.0f; }
+
+    static bool lastL = false;
+    bool curL = (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS);
+    if (curL && !lastL) showRects = !showRects;
+    lastL = curL;
+
+    static bool last1 = false, last2 = false;
+    bool cur1 = (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS);
+    bool cur2 = (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS);
+    if (cur1 && !last1) currentPolySet = (currentPolySet + 1) % allPolySets.size();
+    if (cur2 && !last2) currentPolySet = (currentPolySet - 1 + allPolySets.size()) % allPolySets.size();
+    last1 = cur1; last2 = cur2;
+}
+
+int main() {
+    if (!glfwInit()) return -1;
+    GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "lab2", nullptr, nullptr);
+    if (!window) { glfwTerminate(); return -1; }
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(1);
+
+    setupAllPolygonSets();
+    float lastTime = glfwGetTime();
+
+    Mat4 ortho = makeOrtho(ORTHO_LEFT, ORTHO_RIGHT, ORTHO_BOTTOM, ORTHO_TOP, ORTHO_NEAR, ORTHO_FAR);
+
+    while (!glfwWindowShouldClose(window)) {
+        float currentTime = glfwGetTime();
+        float deltaTime = currentTime - lastTime;
+        lastTime = currentTime;
+
+        processKey(window, deltaTime);
+
+        glClearColor(0.1f, 0.12f, 0.15f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        Mat4 Rx = makeRotationX(rotX);
+        Mat4 Ry = makeRotationY(rotY);
+        Mat4 Rz = makeRotationZ(rotZ);
+        Mat4 S = makeScale(scaleRate, scaleRate, scaleRate);
+        Mat4 T = makeTranslation(posX, posY, posZ);
+        Mat4 model = multiply(T, multiply(Rz, multiply(Ry, multiply(Rx, S))));
+
+        Mat4 final = multiply(ortho, model);
+
+        std::vector<Poly> currentPolys = getCurrentPolys();
+        std::vector<Poly> transformedPolys;
+        transformedPolys.reserve(currentPolys.size());
+        for (auto& p : currentPolys) transformedPolys.push_back(transformPoly(p, final));
+
+        Rects.clear();
+        ScreenRect fullScreen = { 0, 0, WIDTH, HEIGHT };
+        warnock(transformedPolys, fullScreen);
+
+        if (showRects) for (auto& r : Rects) drawRect(r);
+        
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
+    }
+
+    glfwDestroyWindow(window);
+    glfwTerminate();
+    return 0;
+}

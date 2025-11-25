@@ -1,0 +1,94 @@
+#include <GLFW/glfw3.h>
+#include <cmath>
+#include <GL/freeglut.h>
+#include <vector>
+#include <iostream>
+
+struct Vertex {
+    float x, y, z;
+};
+
+std::vector<std::vector<Vertex>> generateCone(float height, float radius, int ySegments, int thetaSegments) {
+    std::vector<std::vector<Vertex>> mesh(ySegments + 1, std::vector<Vertex>(thetaSegments + 1));
+
+    for (int i = 0; i <= ySegments; ++i) {
+        float y = (height / ySegments) * i;
+        float r = radius * (1.0f - y / height);
+
+        for (int j = 0; j <= thetaSegments; ++j) {
+            float theta = (2.0f * 3.14 * j) / thetaSegments;
+            float x = r * cos(theta);
+            float z = r * sin(theta);
+            mesh[i][j] = { x, y, z };
+        }
+    }
+    return mesh;
+}
+
+void drawConeTriangulated(const std::vector<std::vector<Vertex>>& mesh, int ySegments, int thetaSegments) {
+    glBegin(GL_TRIANGLES);
+
+    for (int i = 0; i < ySegments; ++i) {
+        for (int j = 0; j < thetaSegments; ++j) {
+            Vertex v1 = mesh[i][j];
+            Vertex v2 = mesh[i + 1][j];
+            Vertex v3 = mesh[i + 1][j + 1];
+            Vertex v4 = mesh[i][j + 1];
+
+            float gray1 = 0.3f + 0.7f * (1.0f - v1.y / mesh.back().back().y);
+            glColor3f(gray1, gray1, gray1);
+            glVertex3f(v1.x, v1.y, v1.z);
+            glVertex3f(v2.x, v2.y, v2.z);
+            glVertex3f(v3.x, v3.y, v3.z);
+
+            // Треугольник 2
+            float gray2 = 0.3f + 0.7f * (1.0f - v3.y / mesh.back().back().y);
+            glColor3f(gray2, gray2, gray2);
+            glVertex3f(v1.x, v1.y, v1.z);
+            glVertex3f(v3.x, v3.y, v3.z);
+            glVertex3f(v4.x, v4.y, v4.z);
+        }
+    }
+
+    glEnd();
+}
+
+int main() {
+    GLFWwindow* window = glfwCreateWindow(800, 600, "lab3", nullptr, nullptr);
+    if (!window) {
+        std::cerr << "Ошибка создания окна\n";
+        glfwTerminate();
+        return -1;
+    }
+
+    glfwMakeContextCurrent(window);
+    glEnable(GL_DEPTH_TEST);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPerspective(45.0, 800.0 / 600.0, 0.1, 100.0);
+    glMatrixMode(GL_MODELVIEW);
+
+    auto cone = generateCone(2.5f, 1.0f, 40, 60);
+    float angle = 0.0f;
+
+    while (!glfwWindowShouldClose(window)) {
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glLoadIdentity();
+
+        gluLookAt(3.0, 2.0, 3.0,
+            0.0, 1.0, 0.0,
+            0.0, 1.0, 0.0);
+
+        glRotatef(angle, 0.0f, 1.0f, 0.0f);
+        angle += 0.3f;
+
+        drawConeTriangulated(cone, 40, 60);
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    }
+
+    glfwTerminate();
+    return 0;
+}

@@ -1,0 +1,270 @@
+#include <GL/glut.h>
+#include <vector>
+#include <cmath>
+
+#define M_PI 3.14159265f
+
+float Ka = 0.2f; 
+float Kd = 0.7f; 
+float Ks = 0.5f; 
+float n = 32.0f; 
+float Ia= 0.3f; 
+float Il = 5.0f; 
+float k = 1.0f;
+
+struct Point {
+    float x, y, z;
+    Point(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}
+
+    Point operator+(const Point& other) const {
+        return Point(x + other.x, y + other.y, z + other.z);
+    }
+
+    Point operator-(const Point& other) const {
+        return Point(x - other.x, y - other.y, z - other.z);
+    }
+
+    Point operator*(float scalar) const {
+        return Point(x * scalar, y * scalar, z * scalar);
+    }
+};
+
+Point lightPos = Point(0, 5, 5);
+Point viewPos = Point(0, 0, 5);
+
+struct Triangle {
+    int v1, v2, v3;
+    Triangle(int v1, int v2, int v3) : v1(v1), v2(v2), v3(v3) {}
+};
+
+
+struct Animation {
+    float elapsedTime = 0.0f;
+    float duration = 1.0f;  
+    bool active = false;
+};
+
+float distance(const Point& a, const Point& b) {
+    float dx = a.x - b.x;
+    float dy = a.y - b.y;
+    float dz = a.z - b.z;
+    return sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+Point normalize(const Point& v) {
+    float length = sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    if (length > 0) {
+        return Point(v.x / length, v.y / length, v.z / length);
+    }
+    return v;
+}
+
+float dot(const Point& a, const Point& b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+Point cross(const Point& a, const Point& b) {
+    return Point(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    );
+}
+
+std::vector<Point> vertices;
+std::vector<Point> vertexNormals; 
+std::vector<float> vertexIntensities;
+std::vector<Triangle> triangles;
+
+int profileSegments = 18;
+int rotationSegments = 72;
+float radius = 1.0f;
+
+std::vector<Point> profile;
+
+void createProfile() {
+    profile.clear();
+    for (int i = 1; i <= profileSegments; i++) {
+        float theta = M_PI * i / profileSegments;
+        float x = radius * sin(theta);
+        float y = radius * cos(theta);
+        profile.push_back(Point(x, y, 0));
+    }
+}
+
+std::vector<Point> rotateProfile(const std::vector<Point>& prof, float angle) {
+    std::vector<Point> result;
+    float ca = cos(angle);
+    float sa = sin(angle);
+    for (const auto& p : prof) {
+        float x = p.x * ca - p.z * sa;
+        float z = p.x * sa + p.z * ca;
+        result.push_back(Point(x, p.y, z));
+    }
+    return result;
+}
+
+Point calculateTriangleNormal(const Point& v1, const Point& v2, const Point& v3) {
+    Point edge1 = v2 - v1;
+    Point edge2 = v3 - v1;
+    return normalize(cross(edge1, edge2));
+}
+
+float calculateIntensity(const Point& normal, const Point& point) {
+    Point L = normalize(lightPos - point);
+    Point S = normalize(viewPos - point);
+
+    float NL = dot(normal, L);
+    if (NL < 0) NL = 0;
+
+    Point R = normal * (2.0f * NL) - L;
+    R = normalize(R);
+
+    float RS = dot(R, S);
+    if (RS < 0) RS = 0;
+
+    float d = distance(point, lightPos);
+
+    float ambient = Ia * Ka;
+    float attenuation = Il / (k + d);
+    float diffuse = attenuation * Kd * NL;
+    float specular = attenuation * Ks * powf(RS, n);
+
+    return ambient + diffuse + specular;
+}
+
+void VertexNormals() {
+    vertexNormals.resize(vertices.size(), Point(0, 0, 0));
+
+    for (const Triangle& t : triangles) {
+        Point triNormal = calculateTriangleNormal(vertices[t.v1], vertices[t.v2], vertices[t.v3]);
+
+        vertexNormals[t.v1] = vertexNormals[t.v1] + triNormal;
+        vertexNormals[t.v2] = vertexNormals[t.v2] + triNormal;
+        vertexNormals[t.v3] = vertexNormals[t.v3] + triNormal;
+    }
+
+    for (size_t i = 0; i < vertexNormals.size(); i++) {
+        vertexNormals[i] = normalize(vertexNormals[i]);
+    }
+}
+
+void calculateGouraudIntensities() {
+    vertexIntensities.resize(vertices.size());
+
+    for (size_t i = 0; i < vertices.size(); i++) {
+        float intensity = calculateIntensity(vertexNormals[i], vertices[i]);
+        vertexIntensities[i] = fmax(0.0f, fmin(1.0f, intensity));
+    }
+}
+
+void addRotatedProfile() {
+    vertices.clear();
+    triangles.clear();
+
+    std::vector<int> prevIndices;
+
+    for (int r = 0; r <= rotationSegments; r++) {
+        float angle = 2.0f * M_PI * r / rotationSegments;
+        std::vector<Point> rotated = rotateProfile(profile, angle);
+        std::vector<int> currIndices;
+
+        for (const auto& p : rotated) {
+            vertices.push_back(p);
+            currIndices.push_back(vertices.size() - 1);
+        }
+
+        if (!prevIndices.empty()) {
+            for (size_t i = 0; i < profile.size() - 1; i++) {
+                int a = prevIndices[i];
+                int b = prevIndices[i + 1];
+                int c = currIndices[i + 1];
+                int d = currIndices[i];
+
+                Triangle tri1(a, b, c);
+                Triangle tri2(a, c, d);
+
+                triangles.push_back(tri1);
+                triangles.push_back(tri2);
+            }
+        }
+
+        prevIndices = currIndices;
+    }
+
+    VertexNormals();
+
+    calculateGouraudIntensities();
+}
+
+void display() {
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glLoadIdentity();
+    gluLookAt(viewPos.x, viewPos.y, viewPos.z, 0, 0, 0, 0, 1, 0);
+
+    glBegin(GL_TRIANGLES);
+    for (const Triangle& t : triangles) {
+        glColor3f(vertexIntensities[t.v1], vertexIntensities[t.v1], vertexIntensities[t.v1]);
+        glVertex3f(vertices[t.v1].x, vertices[t.v1].y, vertices[t.v1].z);
+
+        glColor3f(vertexIntensities[t.v2], vertexIntensities[t.v2], vertexIntensities[t.v2]);
+        glVertex3f(vertices[t.v2].x, vertices[t.v2].y, vertices[t.v2].z);
+
+        glColor3f(vertexIntensities[t.v3], vertexIntensities[t.v3], vertexIntensities[t.v3]);
+        glVertex3f(vertices[t.v3].x, vertices[t.v3].y, vertices[t.v3].z);
+    }
+    glEnd();
+
+    glutSwapBuffers();
+}
+
+void reshape(int w, int h) {
+    glViewport(0, 0, w, h);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPerspective(45.0, (float)w / h, 0.1, 100.0);
+    glMatrixMode(GL_MODELVIEW);
+}
+
+void idle() {
+    glutPostRedisplay();
+}
+
+void updateLighting() {
+    VertexNormals();
+    calculateGouraudIntensities();
+}
+
+void keyboard(unsigned char key, int x, int y) {
+    switch (key) {
+    case 27: exit(0); break;
+    case 'w': viewPos.z -= 0.5f; break;
+    case 's': viewPos.z += 0.5f; break;
+    case 'a': viewPos.x -= 0.5f; break;
+    case 'd': viewPos.x += 0.5f; break; 
+    case 'q': viewPos.y += 0.5f; break;
+    case 'e': viewPos.y -= 0.5f; break; 
+    }
+}
+
+
+int main(int argc, char** argv) {
+    glutInit(&argc, argv);
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
+    glutInitWindowSize(800, 600);
+    glutCreateWindow("lab3");
+
+    glEnable(GL_DEPTH_TEST);
+    glClearColor(0, 0, 0, 1);
+
+    createProfile();
+    addRotatedProfile();
+
+    glutDisplayFunc(display);
+    glutReshapeFunc(reshape);
+    glutKeyboardFunc(keyboard);
+    glutIdleFunc(idle);
+
+    glutMainLoop();
+    return 0;
+}
